@@ -26,6 +26,27 @@ Manage saved sessions without calling a model:
 .venv/bin/pycodex --fork <session-id>
 ```
 
+## Isolated and parallel agents
+
+Run one task in an isolated Git worktree. The worktree is created beside the repository under `.<repo>-pycodex-worktrees/` on a `pycodex/<name>` branch.
+
+```bash
+.venv/bin/pycodex --worktree investigate-login --workspace /path/to/project "investigate the login failure"
+```
+
+Run independent tasks concurrently with a task file. Each task gets its own worktree; use `--approval ask` for read-only research or explicitly choose a less restrictive profile for autonomous edits.
+
+```json
+{"tasks": [
+  {"name": "research", "task": "inspect the failing tests and report likely causes"},
+  {"name": "implementation", "task": "implement a focused fix and run relevant tests"}
+]}
+```
+
+```bash
+.venv/bin/pycodex --parallel /path/to/tasks.json --workspace /path/to/project --approval ask
+```
+
 Permission profiles:
 
 ```bash

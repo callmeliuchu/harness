@@ -12,6 +12,7 @@ from .models import OpenAIChatModel
 from .mcp import McpManager
 from .session import JsonlSession, list_sessions, session_events
 from .tools import Tool, ToolRegistry, workspace_tools
+from .worktree import load_parallel_tasks, prepare_worktree
 
 
 BASE_INSTRUCTIONS = "You are a careful coding agent. Inspect before editing and run focused checks after edits. In Git repositories, call git_status before changing files and git_diff after changing files so you can avoid unrelated worktree changes and verify your patch."
@@ -122,12 +123,17 @@ async def run(args: argparse.Namespace) -> None:
         fork = source.fork(args.session_dir)
         print(f"Forked session: {fork.session_id}")
         return
+    if args.parallel:
+        await run_parallel(args)
+        return
     config = DeepSeekConfig.from_claude_settings()
     model = OpenAIChatModel(**config.__dict__)
     session = JsonlSession.load(args.session_dir, args.resume) if args.resume else None
     workspace = args.workspace or (session.workspace if session else Path.cwd())
     if session and workspace.resolve() != session.workspace.resolve():
         raise ValueError("--workspace must match the workspace stored in the resumed session")
+    if args.worktree:
+        workspace = prepare_worktree(workspace, args.worktree)
     instructions = load_instructions(workspace)
     session = session or JsonlSession.create(
         args.session_dir,
@@ -180,12 +186,37 @@ async def run(args: argparse.Namespace) -> None:
             await mcp.close()
 
 
+async def run_parallel(args: argparse.Namespace) -> None:
+    workspace = (args.workspace or Path.cwd()).resolve()
+    tasks = load_parallel_tasks(args.parallel)
+    commands = []
+    for task in tasks:
+        worktree = prepare_worktree(workspace, task.name)
+        command = [sys.executable, "-m", "pycodex", "--workspace", str(worktree), "--approval", args.approval, "--session-dir", str(args.session_dir)]
+        if args.mcp_config:
+            command.extend(["--mcp-config", str(args.mcp_config)])
+        command.append(task.task)
+        commands.append((task, worktree, command))
+        print(f"agent {task.name}> worktree {worktree}")
+    processes = [
+        asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.DEVNULL)
+        for _, _, command in commands
+    ]
+    results = await asyncio.gather(*processes)
+    failed = [task.name for (task, _, _), process in zip(commands, results, strict=True) if process.returncode]
+    if failed:
+        raise RuntimeError(f"parallel agents failed: {', '.join(failed)}")
+    print(f"Completed {len(commands)} parallel agents.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Headless DeepSeek coding agent")
     parser.add_argument("task", nargs="?")
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--interactive", action="store_true", help="continue a local conversation until /exit")
     parser.add_argument("--resume", metavar="SESSION_ID", help="resume a saved session")
+    parser.add_argument("--worktree", metavar="NAME", help="run this agent in an isolated Git worktree")
+    parser.add_argument("--parallel", type=Path, metavar="TASKS_JSON", help="run independent tasks concurrently in isolated worktrees")
     parser.add_argument("--mcp-config", type=Path, help="JSON config for stdio MCP servers")
     management = parser.add_mutually_exclusive_group()
     management.add_argument("--list-sessions", action="store_true", help="list saved sessions")
@@ -206,9 +237,13 @@ def main() -> None:
     )
     args = parser.parse_args()
     managing = args.list_sessions or args.show_session or args.fork
-    if managing and (args.interactive or args.task or args.resume):
+    if managing and (args.interactive or args.task or args.resume or args.worktree or args.parallel):
         parser.error("session management options cannot be combined with a task, --interactive, or --resume")
-    if not managing and not args.interactive and not args.task:
+    if args.parallel and (args.interactive or args.task or args.resume or args.worktree):
+        parser.error("--parallel cannot be combined with a task, --interactive, --resume, or --worktree")
+    if args.worktree and args.resume:
+        parser.error("--worktree cannot be combined with --resume")
+    if not managing and not args.parallel and not args.interactive and not args.task:
         parser.error("task is required unless --interactive is used")
     if args.full_auto and args.approval != "ask":
         parser.error("--full-auto cannot be combined with --approval")

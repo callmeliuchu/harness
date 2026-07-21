@@ -14,6 +14,7 @@ from pycodex.models import ModelTurn, ToolCall
 from pycodex.mcp import McpManager
 from pycodex.session import JsonlSession, list_sessions, session_events
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
+from pycodex.worktree import load_parallel_tasks, prepare_worktree
 
 
 class FakeModel:
@@ -37,6 +38,20 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_creates_reusable_isolated_worktree_and_loads_parallel_tasks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "README.md").write_text("base\n")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"], cwd=root, check=True)
+            worktree = prepare_worktree(root, "research")
+            self.assertTrue((worktree / "README.md").is_file())
+            self.assertEqual(prepare_worktree(root, "research"), worktree)
+            task_file = root / "tasks.json"
+            task_file.write_text(json.dumps({"tasks": [{"name": "research", "task": "inspect"}, {"name": "implement", "task": "fix"}]}))
+            self.assertEqual([task.name for task in load_parallel_tasks(task_file)], ["research", "implement"])
     def test_mcp_tools_are_loaded_and_called(self):
         server = '''import json, sys
 for line in sys.stdin:
