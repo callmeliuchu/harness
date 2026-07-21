@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from pathlib import Path
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -70,6 +71,34 @@ def create_app(session_dir: Path | None = None) -> FastAPI:
         events = _read_events(_session_path(session_dir, session_id))
         metadata = next((event for event in events if event.get("type") == "session"), {})
         return {"metadata": metadata, "events": events}
+
+    @app.get("/api/sessions/{session_id}/events")
+    async def stream_events(session_id: str, after: int = -1) -> StreamingResponse:
+        path = _session_path(session_dir, session_id)
+
+        async def event_stream():
+            index = after
+            for event in _read_events(path):
+                if event["index"] > index:
+                    index = event["index"]
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            position = path.stat().st_size
+            while True:
+                await asyncio.sleep(0.25)
+                with path.open("r", encoding="utf-8") as file:
+                    file.seek(position)
+                    lines = file.readlines()
+                    position = file.tell()
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    index += 1
+                    event["index"] = index
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/")
     def dashboard() -> FileResponse:

@@ -23,3 +23,11 @@ class WebTests(unittest.TestCase):
             detail = client.get(f"/api/sessions/{session.session_id}").json()
             self.assertTrue(any(event.get("type") == "agent_event" for event in detail["events"]))
             self.assertIn("PyCodex Trace", client.get("/").text)
+
+    def test_dashboard_registers_event_stream(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions = Path(tmp) / "sessions"
+            session = JsonlSession.create(sessions, instructions="test", workspace=Path(tmp))
+            app = create_app(sessions)
+            paths = {route.path for route in app.routes}
+            self.assertIn("/api/sessions/{session_id}/events", paths)

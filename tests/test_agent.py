@@ -19,6 +19,14 @@ class FakeModel:
         return next(self.turns)
 
 
+class StreamingFakeModel(FakeModel):
+    async def complete_stream(self, messages, tools, on_text_delta):
+        turn = await self.complete(messages, tools)
+        if turn.text:
+            on_text_delta(turn.text)
+        return turn
+
+
 async def approve_all(*_):
     return True
 
@@ -74,6 +82,24 @@ class AgentTests(unittest.TestCase):
                 "model_request_completed",
                 "turn_completed",
             ])
+
+    def test_agent_emits_streaming_text_and_command_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+            model = StreamingFakeModel([
+                ModelTurn("", [ToolCall("call_1", "run_command", {"argv": ["printf", "hello\\n"]})]),
+                ModelTurn("Completed", []),
+            ])
+            agent = Agent(
+                model,
+                ToolRegistry(workspace_tools(Path(tmp))),
+                instructions="test",
+                approve=approve_all,
+                on_event=lambda event, data: events.append((event, data)),
+            )
+            self.assertEqual(asyncio.run(agent.run("run a command")), "Completed")
+            self.assertIn(("model_text_delta", {"step": 2, "text": "Completed"}), events)
+            self.assertIn(("tool_output", {"call_id": "call_1", "name": "run_command", "stream": "stdout", "text": "hello\n"}), events)
 
     def test_workspace_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

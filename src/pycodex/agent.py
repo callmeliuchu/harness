@@ -86,7 +86,11 @@ class Agent:
         for step in range(self.max_steps):
             await self._compact_if_needed()
             self._emit("model_request_started", step=step + 1)
-            turn = await self.model.complete(self.history, self.tools.schemas())
+            stream = getattr(self.model, "complete_stream", None)
+            if stream:
+                turn = await stream(self.history, self.tools.schemas(), lambda text: self._emit("model_text_delta", step=step + 1, text=text))
+            else:
+                turn = await self.model.complete(self.history, self.tools.schemas())
             self._emit("model_request_completed", step=step + 1)
             if not turn.tool_calls:
                 self._append({"role": "assistant", "content": turn.text})
@@ -105,7 +109,10 @@ class Agent:
             for call in turn.tool_calls:
                 self._emit("tool_call_started", call_id=call.id, name=call.name, arguments=call.arguments)
                 try:
-                    result = await self.tools.execute(call.name, call.arguments, self.approve)
+                    result = await self.tools.execute(
+                        call.name, call.arguments, self.approve,
+                        lambda stream, text: self._emit("tool_output", call_id=call.id, name=call.name, stream=stream, text=text),
+                    )
                 except Exception as exc:  # Feed tool failures back to the model.
                     result = {"ok": False, "error": str(exc)}
                 self._emit("tool_call_completed", call_id=call.id, name=call.name, ok=result.get("ok", False), result=result)

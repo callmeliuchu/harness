@@ -13,12 +13,15 @@ class ToolError(Exception):
     pass
 
 
+ToolOutput = Callable[[str, str], None]
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+    handler: Callable[[dict[str, Any], ToolOutput | None], Awaitable[dict[str, Any]]]
     readonly: bool = False
 
     def schema(self) -> dict[str, Any]:
@@ -39,13 +42,13 @@ class ToolRegistry:
     def schemas(self) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self._tools.values()]
 
-    async def execute(self, name: str, arguments: dict[str, Any], approve: Callable[[Tool, dict[str, Any]], Awaitable[bool]]) -> dict[str, Any]:
+    async def execute(self, name: str, arguments: dict[str, Any], approve: Callable[[Tool, dict[str, Any]], Awaitable[bool]], on_output: ToolOutput | None = None) -> dict[str, Any]:
         tool = self._tools.get(name)
         if not tool:
             raise ToolError(f"Unknown tool: {name}")
         if not tool.readonly and not await approve(tool, arguments):
             return {"ok": False, "error": "Operation denied by policy"}
-        return await tool.handler(arguments)
+        return await tool.handler(arguments, on_output)
 
 
 def _workspace_path(root: Path, requested: str) -> Path:
@@ -59,7 +62,7 @@ def _workspace_path(root: Path, requested: str) -> Path:
 def workspace_tools(root: Path) -> list[Tool]:
     root = root.resolve()
 
-    async def list_files(args: dict[str, Any]) -> dict[str, Any]:
+    async def list_files(args: dict[str, Any], _: ToolOutput | None = None) -> dict[str, Any]:
         relative = args.get("path", ".")
         directory = _workspace_path(root, relative)
         if not directory.is_dir():
@@ -67,7 +70,7 @@ def workspace_tools(root: Path) -> list[Tool]:
         files = [str(item.relative_to(root)) for item in directory.rglob("*") if item.is_file() and ".git" not in item.parts]
         return {"ok": True, "files": files[:500], "truncated": len(files) > 500}
 
-    async def read_file(args: dict[str, Any]) -> dict[str, Any]:
+    async def read_file(args: dict[str, Any], _: ToolOutput | None = None) -> dict[str, Any]:
         path = _workspace_path(root, args["path"])
         if not path.is_file():
             raise ToolError(f"Not a file: {args['path']}")
@@ -75,7 +78,7 @@ def workspace_tools(root: Path) -> list[Tool]:
         limit = 50_000
         return {"ok": True, "content": content[:limit], "truncated": len(content) > limit}
 
-    async def search_text(args: dict[str, Any]) -> dict[str, Any]:
+    async def search_text(args: dict[str, Any], _: ToolOutput | None = None) -> dict[str, Any]:
         query = args["query"]
         if not isinstance(query, str) or not query:
             raise ToolError("query must be a non-empty string")
@@ -124,13 +127,13 @@ def workspace_tools(root: Path) -> list[Tool]:
             ]
         return {"ok": True, "query": query, "matches": matches, "truncated": len(matches) >= max_results}
 
-    async def write_file(args: dict[str, Any]) -> dict[str, Any]:
+    async def write_file(args: dict[str, Any], _: ToolOutput | None = None) -> dict[str, Any]:
         path = _workspace_path(root, args["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(args["content"], encoding="utf-8")
         return {"ok": True, "path": str(path.relative_to(root))}
 
-    async def apply_patch(args: dict[str, Any]) -> dict[str, Any]:
+    async def apply_patch(args: dict[str, Any], _: ToolOutput | None = None) -> dict[str, Any]:
         patch = args["patch"]
         if not isinstance(patch, str) or not patch.strip():
             raise ToolError("patch must be a non-empty unified diff")
@@ -174,7 +177,7 @@ def workspace_tools(root: Path) -> list[Tool]:
             if temp_path:
                 Path(temp_path).unlink(missing_ok=True)
 
-    async def run_command(args: dict[str, Any]) -> dict[str, Any]:
+    async def run_command(args: dict[str, Any], on_output: ToolOutput | None = None) -> dict[str, Any]:
         argv = args["argv"]
         if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
             raise ToolError("argv must be a non-empty list of strings")
@@ -188,7 +191,17 @@ def workspace_tools(root: Path) -> list[Tool]:
             start_new_session=True,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            async def read_stream(stream: asyncio.StreamReader | None, name: str) -> bytes:
+                chunks = []
+                while line := await stream.readline():
+                    chunks.append(line)
+                    if on_output:
+                        on_output(name, line.decode(errors="replace"))
+                return b"".join(chunks)
+
+            stdout, stderr = await asyncio.wait_for(
+                asyncio.gather(read_stream(process.stdout, "stdout"), read_stream(process.stderr, "stderr")), timeout=timeout
+            )
         except TimeoutError:
             os.killpg(process.pid, 15)
             await process.wait()
