@@ -63,12 +63,15 @@ class JsonlSession:
 
     def append(self, item: dict) -> None:
         self.history.append(item)
-        self._write({"type": "item", "item": item})
+        self._write({"type": "item", "at": datetime.now(UTC).isoformat(), "item": item})
+
+    def append_event(self, event: str, data: dict) -> None:
+        self._write({"type": "agent_event", "at": datetime.now(UTC).isoformat(), "event": event, "data": data})
 
     def replace_history(self, history: list[dict]) -> None:
         """Persist a compacted model context while retaining prior JSONL events."""
         self.history = list(history)
-        self._write({"type": "compaction", "history": self.history})
+        self._write({"type": "compaction", "at": datetime.now(UTC).isoformat(), "history": self.history})
 
     def _write(self, event: dict) -> None:
         with self.path.open("a", encoding="utf-8") as file:

@@ -32,6 +32,17 @@ While a turn is running, the terminal prints status lines for model requests and
 
 Long sessions automatically compact older history at an estimated 80,000 characters while preserving a structured summary and recent messages. The complete event log remains in the session JSONL. Use `--compact-after-chars 0` to disable it or set a lower threshold for testing.
 
+## Trace dashboard
+
+Install the optional web dependencies, then start the read-only local dashboard:
+
+```bash
+.venv/bin/pip install -e '.[web]'
+.venv/bin/pycodex-web
+```
+
+Open `http://127.0.0.1:8765`. It lists saved sessions and renders their messages, tool calls, command results, status events, and compaction events. Pass `--session-dir /path/to/sessions` to inspect another session directory.
+
 ## Verify
 
 ```bash

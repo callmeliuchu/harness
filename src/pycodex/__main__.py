@@ -41,6 +41,11 @@ def print_status(event: str, data: dict) -> None:
     print(f"status> {message}", file=sys.stderr)
 
 
+def record_status(session: JsonlSession, event: str, data: dict) -> None:
+    session.append_event(event, data)
+    print_status(event, data)
+
+
 async def run(args: argparse.Namespace) -> None:
     config = DeepSeekConfig.from_claude_settings()
     model = OpenAIChatModel(**config.__dict__)
@@ -61,7 +66,7 @@ async def run(args: argparse.Namespace) -> None:
         approve=allow_all if args.full_auto else console_approval,
         history=list(session.history),
         history_sink=session.append,
-        on_event=print_status,
+        on_event=lambda event, data: record_status(session, event, data),
         compact_after_chars=args.compact_after_chars,
         compaction_sink=session.replace_history,
     )
