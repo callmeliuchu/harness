@@ -9,6 +9,7 @@ from pathlib import Path
 from .agent import Agent
 from .config import DeepSeekConfig
 from .models import OpenAIChatModel
+from .mcp import McpManager
 from .session import JsonlSession, list_sessions, session_events
 from .tools import Tool, ToolRegistry, workspace_tools
 
@@ -138,7 +139,10 @@ async def run(args: argparse.Namespace) -> None:
         history[0] = {"role": "system", "content": instructions}
     else:
         history.insert(0, {"role": "system", "content": instructions})
-    registry = ToolRegistry(workspace_tools(workspace))
+    mcp = McpManager.from_config(args.mcp_config) if args.mcp_config else None
+    if mcp:
+        await mcp.start()
+    registry = ToolRegistry([*workspace_tools(workspace), *(mcp.tools() if mcp else [])])
     console_events = ConsoleEvents(session)
     agent = Agent(
         model,
@@ -151,25 +155,29 @@ async def run(args: argparse.Namespace) -> None:
         compact_after_chars=args.compact_after_chars,
         compaction_sink=session.replace_history,
     )
-    print(f"Session: {session.session_id}")
-    if args.interactive:
-        while True:
-            try:
-                task = input("you> ").strip()
-            except EOFError:
-                print()
-                break
-            if task in {"/exit", "/quit"}:
-                break
-            if task:
-                reply = await agent.run(task)
-                if not console_events.streamed_text:
-                    print(f"agent> {reply}")
-                console_events.streamed_text = False
-        return
-    reply = await agent.run(args.task)
-    if not console_events.streamed_text:
-        print(reply)
+    try:
+        print(f"Session: {session.session_id}")
+        if args.interactive:
+            while True:
+                try:
+                    task = input("you> ").strip()
+                except EOFError:
+                    print()
+                    break
+                if task in {"/exit", "/quit"}:
+                    break
+                if task:
+                    reply = await agent.run(task)
+                    if not console_events.streamed_text:
+                        print(f"agent> {reply}")
+                    console_events.streamed_text = False
+            return
+        reply = await agent.run(args.task)
+        if not console_events.streamed_text:
+            print(reply)
+    finally:
+        if mcp:
+            await mcp.close()
 
 
 def main() -> None:
@@ -178,6 +186,7 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--interactive", action="store_true", help="continue a local conversation until /exit")
     parser.add_argument("--resume", metavar="SESSION_ID", help="resume a saved session")
+    parser.add_argument("--mcp-config", type=Path, help="JSON config for stdio MCP servers")
     management = parser.add_mutually_exclusive_group()
     management.add_argument("--list-sessions", action="store_true", help="list saved sessions")
     management.add_argument("--show-session", metavar="SESSION_ID", help="print a saved session's JSONL events")

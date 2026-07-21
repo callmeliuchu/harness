@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from pathlib import Path
 from pycodex.agent import Agent
 from pycodex.__main__ import BASE_INSTRUCTIONS, ConsoleEvents, approval_for, load_instructions
 from pycodex.models import ModelTurn, ToolCall
+from pycodex.mcp import McpManager
 from pycodex.session import JsonlSession, list_sessions, session_events
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
 
@@ -35,6 +37,41 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_mcp_tools_are_loaded_and_called(self):
+        server = '''import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if "id" not in request:
+        continue
+    if method == "initialize": result = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "test", "version": "1"}}
+    elif method == "tools/list": result = {"tools": [{"name": "echo", "description": "Echo input", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}
+    elif method == "tools/call": result = {"content": [{"type": "text", "text": request["params"]["arguments"]["text"]}]}
+    else: result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "mcp.json"
+            config.write_text(json.dumps({"mcpServers": {"demo": {"command": sys.executable, "args": ["-u", "-c", server]}}}))
+
+            async def call_mcp():
+                manager = McpManager.from_config(config)
+                await manager.start()
+                try:
+                    registry = ToolRegistry(manager.tools())
+                    return await registry.execute("mcp_demo_echo", {"text": "hello"}, approve_all)
+                finally:
+                    await manager.close()
+
+            result = asyncio.run(call_mcp())
+            self.assertEqual(result, {"ok": True, "content": [{"type": "text", "text": "hello"}], "structured_content": None})
+
+    def test_mcp_config_requires_explicit_environment_variables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "mcp.json"
+            config.write_text(json.dumps({"mcpServers": {"demo": {"command": "echo", "env": {"TOKEN": "${env:PYCODEx_MISSING}"}}}}))
+            with self.assertRaisesRegex(ValueError, "PYCODEx_MISSING"):
+                McpManager.from_config(config)
     def test_git_status_and_diff_are_read_only_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -42,6 +42,29 @@ Reads are always allowed. The workspace check prevents the built-in file tools f
 
 Built-in coding tools include `search_text` (ripgrep matches with line context), `git_status`, `git_diff`, and `apply_patch` (unified diff only; paths are confined to the workspace and `git apply --check --no-index` must succeed before it writes).
 
+## MCP tools
+
+Attach stdio MCP servers with a local JSON config. Every MCP tool is treated as a mutating tool, so it follows the active approval profile.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "your-github-mcp-server",
+      "args": [],
+      "env": {"GITHUB_TOKEN": "${env:GITHUB_TOKEN}"}
+    },
+    "database": {"command": "your-database-mcp-server", "args": []}
+  }
+}
+```
+
+MCP servers receive only `PATH` plus variables explicitly listed in `env`; `${env:NAME}` forwards one local environment variable. Keep the config file out of Git. Run with:
+
+```bash
+.venv/bin/pycodex --mcp-config /path/to/mcp.json --interactive --workspace /path/to/project
+```
+
 While a turn is running, the terminal prints status lines for model requests and tool calls. These report agent activity, not hidden model reasoning.
 
 Long sessions automatically compact older history at an estimated 80,000 characters while preserving a structured summary and recent messages. The complete event log remains in the session JSONL. Use `--compact-after-chars 0` to disable it or set a lower threshold for testing.
