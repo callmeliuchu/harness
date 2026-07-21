@@ -17,8 +17,15 @@ async def console_approval(tool: Tool, arguments: dict) -> bool:
     return input(prompt).strip().lower() in {"y", "yes"}
 
 
-async def allow_all(_: Tool, __: dict) -> bool:
-    return True
+def approval_for(mode: str):
+    async def approve(tool: Tool, arguments: dict) -> bool:
+        if mode == "full-auto":
+            return True
+        if mode == "workspace" and tool.name in {"write_file", "apply_patch"}:
+            return True
+        return await console_approval(tool, arguments)
+
+    return approve
 
 
 def print_status(event: str, data: dict) -> None:
@@ -63,7 +70,7 @@ async def run(args: argparse.Namespace) -> None:
         model,
         registry,
         instructions="You are a careful coding agent. Inspect before editing and run focused checks after edits.",
-        approve=allow_all if args.full_auto else console_approval,
+        approve=approval_for(args.approval),
         history=list(session.history),
         history_sink=session.append,
         on_event=lambda event, data: record_status(session, event, data),
@@ -95,13 +102,23 @@ def main() -> None:
     parser.add_argument("--session-dir", type=Path, default=Path.home() / ".pycodex" / "sessions")
     parser.add_argument("--compact-after-chars", type=int, default=80_000, help="compact history after this estimated size; 0 disables it")
     parser.add_argument(
+        "--approval",
+        choices=("ask", "workspace", "full-auto"),
+        default="ask",
+        help="permission profile: ask (default), workspace, or full-auto",
+    )
+    parser.add_argument(
         "--full-auto",
         action="store_true",
-        help="allow built-in write and command tools without asking",
+        help="legacy alias for --approval full-auto",
     )
     args = parser.parse_args()
     if not args.interactive and not args.task:
         parser.error("task is required unless --interactive is used")
+    if args.full_auto and args.approval != "ask":
+        parser.error("--full-auto cannot be combined with --approval")
+    if args.full_auto:
+        args.approval = "full-auto"
     asyncio.run(run(args))
 
 

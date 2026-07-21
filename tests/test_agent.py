@@ -1,10 +1,11 @@
 import asyncio
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pycodex.agent import Agent
-from pycodex.__main__ import allow_all
+from pycodex.__main__ import approval_for
 from pycodex.models import ModelTurn, ToolCall
 from pycodex.session import JsonlSession
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
@@ -23,8 +24,19 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
-    def test_full_auto_callback_allows_operations(self):
-        self.assertTrue(asyncio.run(allow_all(None, {})))
+    def test_workspace_approval_allows_edits_but_asks_for_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = {tool.name: tool for tool in workspace_tools(Path(tmp))}
+            approve = approval_for("workspace")
+            self.assertTrue(asyncio.run(approve(tools["write_file"], {})))
+            self.assertTrue(asyncio.run(approve(tools["apply_patch"], {})))
+            with patch("builtins.input", return_value="n"):
+                self.assertFalse(asyncio.run(approve(tools["run_command"], {"argv": ["pytest"]})))
+
+    def test_full_auto_approval_allows_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = next(tool for tool in workspace_tools(Path(tmp)) if tool.name == "run_command")
+            self.assertTrue(asyncio.run(approval_for("full-auto")(tool, {"argv": ["pytest"]})))
 
     def test_tool_loop_writes_a_file(self):
         with tempfile.TemporaryDirectory() as tmp:

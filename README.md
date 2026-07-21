@@ -18,15 +18,19 @@ Each run prints a session ID and writes its history to `~/.pycodex/sessions/<id>
 .venv/bin/pycodex --resume <session-id> "continue and run the tests"
 ```
 
-For unattended operation, add `--full-auto`:
+Permission profiles:
 
 ```bash
-.venv/bin/pycodex --full-auto --workspace /path/to/project "run the tests and fix failures"
+.venv/bin/pycodex --approval ask --workspace /path/to/project "fix the tests"        # default: confirm all writes and commands
+.venv/bin/pycodex --approval workspace --workspace /path/to/project "fix the tests" # auto-approve writes and patches; ask for commands
+.venv/bin/pycodex --approval full-auto --workspace /path/to/project "fix the tests" # auto-approve built-in tools
 ```
+
+`--full-auto` remains as a legacy alias for `--approval full-auto`.
 
 It reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and, by default, `ANTHROPIC_SMALL_FAST_MODEL` from the local Claude settings file. Set `OPENAI_MODEL` there to override that choice. The key is never copied into this repository.
 
-Every write or command requires a terminal confirmation unless `--full-auto` is supplied. Reads are allowed automatically. The workspace check prevents the built-in file tools from accessing paths outside `--workspace`; it is not a replacement for a container sandbox when running untrusted commands.
+Reads are always allowed. The workspace check prevents the built-in file tools from accessing paths outside `--workspace`; it is not a replacement for a container sandbox when running untrusted commands.
 
 Built-in coding tools include `search_text` (ripgrep matches with line context) and `apply_patch` (unified diff only; paths are confined to the workspace and `git apply --check --no-index` must succeed before it writes).
 
