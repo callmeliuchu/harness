@@ -12,6 +12,21 @@ from .session import JsonlSession
 from .tools import Tool, ToolRegistry, workspace_tools
 
 
+BASE_INSTRUCTIONS = "You are a careful coding agent. Inspect before editing and run focused checks after edits."
+
+
+def load_instructions(workspace: Path) -> str:
+    """Combine the built-in agent guidance with an optional repository AGENTS.md."""
+    workspace = workspace.resolve()
+    path = workspace / "AGENTS.md"
+    if not path.is_file() or not path.resolve().is_relative_to(workspace):
+        return BASE_INSTRUCTIONS
+    guidance = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not guidance:
+        return BASE_INSTRUCTIONS
+    return f"{BASE_INSTRUCTIONS}\n\n# Repository instructions (AGENTS.md)\n{guidance[:50_000]}"
+
+
 async def console_approval(tool: Tool, arguments: dict) -> bool:
     prompt = f"Allow {tool.name} with {arguments}? [y/N] "
     return input(prompt).strip().lower() in {"y", "yes"}
@@ -83,19 +98,25 @@ async def run(args: argparse.Namespace) -> None:
     workspace = args.workspace or (session.workspace if session else Path.cwd())
     if session and workspace.resolve() != session.workspace.resolve():
         raise ValueError("--workspace must match the workspace stored in the resumed session")
+    instructions = load_instructions(workspace)
     session = session or JsonlSession.create(
         args.session_dir,
-        instructions="You are a careful coding agent. Inspect before editing and run focused checks after edits.",
+        instructions=instructions,
         workspace=workspace,
     )
+    history = list(session.history)
+    if history and history[0].get("role") == "system":
+        history[0] = {"role": "system", "content": instructions}
+    else:
+        history.insert(0, {"role": "system", "content": instructions})
     registry = ToolRegistry(workspace_tools(workspace))
     console_events = ConsoleEvents(session)
     agent = Agent(
         model,
         registry,
-        instructions="You are a careful coding agent. Inspect before editing and run focused checks after edits.",
+        instructions=instructions,
         approve=approval_for(args.approval),
-        history=list(session.history),
+        history=history,
         history_sink=session.append,
         on_event=console_events,
         compact_after_chars=args.compact_after_chars,

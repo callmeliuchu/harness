@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 
 from pycodex.agent import Agent
-from pycodex.__main__ import ConsoleEvents, approval_for
+from pycodex.__main__ import BASE_INSTRUCTIONS, ConsoleEvents, approval_for, load_instructions
 from pycodex.models import ModelTurn, ToolCall
 from pycodex.session import JsonlSession
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
@@ -33,6 +33,19 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_load_instructions_includes_root_agents_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "AGENTS.md").write_text("Run focused tests.")
+            self.assertEqual(
+                load_instructions(workspace),
+                f"{BASE_INSTRUCTIONS}\n\n# Repository instructions (AGENTS.md)\nRun focused tests.",
+            )
+
+    def test_load_instructions_uses_base_without_agents_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(load_instructions(Path(tmp)), BASE_INSTRUCTIONS)
+
     def test_console_events_prints_streamed_text_once(self):
         session = Mock()
         console = ConsoleEvents(session)
