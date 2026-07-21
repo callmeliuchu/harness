@@ -178,6 +178,26 @@ def workspace_tools(root: Path) -> list[Tool]:
             if temp_path:
                 Path(temp_path).unlink(missing_ok=True)
 
+    async def run_git(*argv: str) -> tuple[str, str]:
+        process = await asyncio.create_subprocess_exec(
+            "git", *argv, cwd=root, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode:
+            raise ToolError(stderr.decode(errors="replace").strip() or "git command failed")
+        return stdout.decode(errors="replace"), stderr.decode(errors="replace")
+
+    async def git_status(_: dict[str, Any], __: ToolOutput | None = None) -> dict[str, Any]:
+        stdout, _ = await run_git("status", "--short", "--branch")
+        lines = stdout.splitlines()
+        return {"ok": True, "branch": lines[0][3:] if lines else "", "changes": lines[1:]}
+
+    async def git_diff(_: dict[str, Any], __: ToolOutput | None = None) -> dict[str, Any]:
+        stat, _ = await run_git("diff", "--no-ext-diff", "--stat")
+        diff, _ = await run_git("diff", "--no-ext-diff", "--unified=3")
+        limit = 30_000
+        return {"ok": True, "stat": stat, "diff": diff[:limit], "truncated": len(diff) > limit}
+
     async def run_command(args: dict[str, Any], on_output: ToolOutput | None = None) -> dict[str, Any]:
         argv = args["argv"]
         if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
@@ -262,6 +282,8 @@ def workspace_tools(root: Path) -> list[Tool]:
         Tool("list_files", "List files below a workspace directory.", object_schema | {"properties": {"path": {"type": "string"}}}, list_files, readonly=True),
         Tool("read_file", "Read a UTF-8 text file below the workspace.", object_schema | {"properties": {"path": {"type": "string"}}, "required": ["path"]}, read_file, readonly=True),
         Tool("search_text", "Search workspace text using ripgrep and return matches with line context.", object_schema | {"properties": {"query": {"type": "string"}, "path": {"type": "string"}, "max_results": {"type": "integer"}}, "required": ["query"]}, search_text, readonly=True),
+        Tool("git_status", "Show the current Git branch and working-tree changes.", object_schema, git_status, readonly=True),
+        Tool("git_diff", "Show the current unstaged Git diff and summary.", object_schema, git_diff, readonly=True),
         Tool("write_file", "Create or replace a UTF-8 text file below the workspace.", object_schema | {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}, write_file),
         Tool("apply_patch", "Validate then apply a unified diff within the workspace.", object_schema | {"properties": {"patch": {"type": "string"}, "check_only": {"type": "boolean"}}, "required": ["patch"]}, apply_patch),
         Tool("run_command", "Run an argv command inside the workspace; never pass a shell string.", object_schema | {"properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}, "timeout_seconds": {"type": "number"}}, "required": ["argv"]}, run_command),

@@ -40,7 +40,7 @@ It reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and, by default, `ANTHROPIC_SMALL_
 
 Reads are always allowed. The workspace check prevents the built-in file tools from accessing paths outside `--workspace`; it is not a replacement for a container sandbox when running untrusted commands.
 
-Built-in coding tools include `search_text` (ripgrep matches with line context) and `apply_patch` (unified diff only; paths are confined to the workspace and `git apply --check --no-index` must succeed before it writes).
+Built-in coding tools include `search_text` (ripgrep matches with line context), `git_status`, `git_diff`, and `apply_patch` (unified diff only; paths are confined to the workspace and `git apply --check --no-index` must succeed before it writes).
 
 While a turn is running, the terminal prints status lines for model requests and tool calls. These report agent activity, not hidden model reasoning.
 

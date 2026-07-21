@@ -13,7 +13,7 @@ from .session import JsonlSession, list_sessions, session_events
 from .tools import Tool, ToolRegistry, workspace_tools
 
 
-BASE_INSTRUCTIONS = "You are a careful coding agent. Inspect before editing and run focused checks after edits."
+BASE_INSTRUCTIONS = "You are a careful coding agent. Inspect before editing and run focused checks after edits. In Git repositories, call git_status before changing files and git_diff after changing files so you can avoid unrelated worktree changes and verify your patch."
 
 
 def load_instructions(workspace: Path) -> str:

@@ -5,7 +5,7 @@ import json
 from typing import Any, Awaitable, Callable
 
 from .models import ChatModel
-from .tools import Tool, ToolRegistry
+from .tools import Tool, ToolError, ToolRegistry
 
 
 Approval = Callable[[Tool, dict[str, Any]], Awaitable[bool]]
@@ -45,6 +45,14 @@ class Agent:
         if self.on_event:
             self.on_event(event, data)
 
+    async def _capture_git_context(self, phase: str, tool_name: str) -> None:
+        try:
+            result = await self.tools.execute(tool_name, {}, self.approve)
+        except ToolError:
+            return
+        self._append({"role": "system", "content": f"[Git {phase}]\n{json.dumps(result, ensure_ascii=False)}"})
+        self._emit("git_context_captured", phase=phase, result=result)
+
     async def _compact_if_needed(self) -> None:
         if self.compact_after_chars <= 0 or len(self.history) <= self.keep_recent_messages + 1:
             return
@@ -83,6 +91,7 @@ class Agent:
         self._emit("compaction_completed")
 
     async def run(self, task: str) -> str:
+        await self._capture_git_context("working tree before this task", "git_status")
         self._append({"role": "user", "content": task})
         for step in range(self.max_steps):
             await self._compact_if_needed()
@@ -107,6 +116,7 @@ class Agent:
                     "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
                 } for call in turn.tool_calls],
             })
+            changed_files = False
             for call in turn.tool_calls:
                 self._emit("tool_call_started", call_id=call.id, name=call.name, arguments=call.arguments)
                 try:
@@ -125,4 +135,7 @@ class Agent:
                     "tool_call_id": call.id,
                     "content": json.dumps(result, ensure_ascii=False),
                 })
+                changed_files = changed_files or (call.name in {"write_file", "apply_patch"} and result.get("ok", False))
+            if changed_files:
+                await self._capture_git_context("diff after this agent edit", "git_diff")
         raise RuntimeError(f"Stopped after {self.max_steps} tool-call rounds")

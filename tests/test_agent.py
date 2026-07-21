@@ -1,5 +1,6 @@
 import asyncio
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,41 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_git_status_and_diff_are_read_only_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            file = root / "notes.txt"
+            file.write_text("old\n")
+            subprocess.run(["git", "add", "notes.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"], cwd=root, check=True)
+            file.write_text("new\n")
+            registry = ToolRegistry(workspace_tools(root))
+            status = asyncio.run(registry.execute("git_status", {}, approve_all))
+            diff = asyncio.run(registry.execute("git_diff", {}, approve_all))
+            self.assertTrue(status["ok"])
+            self.assertIn("notes.txt", status["changes"][0])
+            self.assertTrue(diff["ok"])
+            self.assertIn("-old", diff["diff"])
+            self.assertIn("+new", diff["diff"])
+
+    def test_agent_captures_git_context_before_and_after_editing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "notes.txt").write_text("old\n")
+            subprocess.run(["git", "add", "notes.txt"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"], cwd=root, check=True)
+            model = FakeModel([
+                ModelTurn("", [ToolCall("call_1", "write_file", {"path": "notes.txt", "content": "new\n"})]),
+                ModelTurn("Completed", []),
+            ])
+            agent = Agent(model, ToolRegistry(workspace_tools(root)), instructions="test", approve=approve_all)
+            self.assertEqual(asyncio.run(agent.run("update notes")), "Completed")
+            contexts = [item["content"] for item in agent.history if item["role"] == "system"]
+            self.assertTrue(any("working tree before" in item for item in contexts))
+            self.assertTrue(any("diff after" in item and "+new" in item for item in contexts))
+
     def test_lists_shows_and_forks_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / "sessions"
