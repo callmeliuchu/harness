@@ -1,11 +1,12 @@
 import asyncio
+import io
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from pycodex.agent import Agent
-from pycodex.__main__ import approval_for
+from pycodex.__main__ import ConsoleEvents, approval_for
 from pycodex.models import ModelTurn, ToolCall
 from pycodex.session import JsonlSession
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
@@ -32,6 +33,17 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_console_events_prints_streamed_text_once(self):
+        session = Mock()
+        console = ConsoleEvents(session)
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            console("model_text_delta", {"text": "Hello"})
+            console("model_text_delta", {"text": " world"})
+            console("model_request_completed", {"step": 1})
+        self.assertEqual(stdout.getvalue(), "agent> Hello world\n")
+        self.assertTrue(console.streamed_text)
+        self.assertEqual(session.append_event.call_count, 3)
+
     def test_workspace_approval_allows_edits_but_asks_for_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             tools = {tool.name: tool for tool in workspace_tools(Path(tmp))}

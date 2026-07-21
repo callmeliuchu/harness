@@ -53,6 +53,29 @@ def record_status(session: JsonlSession, event: str, data: dict) -> None:
     print_status(event, data)
 
 
+class ConsoleEvents:
+    """Persist events and render streamed model text without duplicating the final reply."""
+
+    def __init__(self, session: JsonlSession):
+        self.session = session
+        self.streamed_text = False
+        self._line_open = False
+
+    def __call__(self, event: str, data: dict) -> None:
+        self.session.append_event(event, data)
+        if event == "model_text_delta":
+            if not self._line_open:
+                print("agent> ", end="", flush=True)
+                self._line_open = True
+            print(data["text"], end="", flush=True)
+            self.streamed_text = True
+            return
+        if self._line_open:
+            print()
+            self._line_open = False
+        print_status(event, data)
+
+
 async def run(args: argparse.Namespace) -> None:
     config = DeepSeekConfig.from_claude_settings()
     model = OpenAIChatModel(**config.__dict__)
@@ -66,6 +89,7 @@ async def run(args: argparse.Namespace) -> None:
         workspace=workspace,
     )
     registry = ToolRegistry(workspace_tools(workspace))
+    console_events = ConsoleEvents(session)
     agent = Agent(
         model,
         registry,
@@ -73,7 +97,7 @@ async def run(args: argparse.Namespace) -> None:
         approve=approval_for(args.approval),
         history=list(session.history),
         history_sink=session.append,
-        on_event=lambda event, data: record_status(session, event, data),
+        on_event=console_events,
         compact_after_chars=args.compact_after_chars,
         compaction_sink=session.replace_history,
     )
@@ -88,9 +112,14 @@ async def run(args: argparse.Namespace) -> None:
             if task in {"/exit", "/quit"}:
                 break
             if task:
-                print(f"agent> {await agent.run(task)}")
+                reply = await agent.run(task)
+                if not console_events.streamed_text:
+                    print(f"agent> {reply}")
+                console_events.streamed_text = False
         return
-    print(await agent.run(args.task))
+    reply = await agent.run(args.task)
+    if not console_events.streamed_text:
+        print(reply)
 
 
 def main() -> None:
