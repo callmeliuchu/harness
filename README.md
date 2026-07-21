@@ -28,6 +28,8 @@ It reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and, by default, `ANTHROPIC_SMALL_
 
 Every write or command requires a terminal confirmation unless `--full-auto` is supplied. Reads are allowed automatically. The workspace check prevents the built-in file tools from accessing paths outside `--workspace`; it is not a replacement for a container sandbox when running untrusted commands.
 
+While a turn is running, the terminal prints status lines for model requests and tool calls. These report agent activity, not hidden model reasoning.
+
 ## Verify
 
 ```bash

@@ -37,6 +37,32 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(asyncio.run(agent.run("write a file")), "Completed")
             self.assertEqual((root / "answer.txt").read_text(), "done")
 
+    def test_agent_emits_model_and_tool_status_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = []
+            model = FakeModel([
+                ModelTurn("", [ToolCall("call_1", "write_file", {"path": "answer.txt", "content": "done"})]),
+                ModelTurn("Completed", []),
+            ])
+            agent = Agent(
+                model,
+                ToolRegistry(workspace_tools(root)),
+                instructions="test",
+                approve=approve_all,
+                on_event=lambda event, _: events.append(event),
+            )
+            asyncio.run(agent.run("write a file"))
+            self.assertEqual(events, [
+                "model_request_started",
+                "model_request_completed",
+                "tool_call_started",
+                "tool_call_completed",
+                "model_request_started",
+                "model_request_completed",
+                "turn_completed",
+            ])
+
     def test_workspace_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

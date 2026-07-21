@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
 from .agent import Agent
@@ -18,6 +19,22 @@ async def console_approval(tool: Tool, arguments: dict) -> bool:
 
 async def allow_all(_: Tool, __: dict) -> bool:
     return True
+
+
+def print_status(event: str, data: dict) -> None:
+    if event == "model_request_started":
+        message = "思考中…"
+    elif event == "tool_call_started":
+        command = data["arguments"].get("argv")
+        detail = " ".join(command) if command else ""
+        message = f"调用工具：{data['name']}" + (f" ({detail})" if detail else "")
+    elif event == "tool_call_completed":
+        message = f"工具完成：{data['name']}" if data["ok"] else f"工具失败：{data['name']}"
+    elif event == "turn_completed":
+        message = "回答完成"
+    else:
+        return
+    print(f"status> {message}", file=sys.stderr)
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -40,6 +57,7 @@ async def run(args: argparse.Namespace) -> None:
         approve=allow_all if args.full_auto else console_approval,
         history=list(session.history),
         history_sink=session.append,
+        on_event=print_status,
     )
     print(f"Session: {session.session_id}")
     if args.interactive:
