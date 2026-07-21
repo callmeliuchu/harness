@@ -1,0 +1,16 @@
+[project]
+name = "pycodex-core"
+version = "0.1.0"
+description = "A small headless coding-agent core for OpenAI-compatible models"
+requires-python = ">=3.12"
+dependencies = ["openai>=1.0"]
+
+[project.scripts]
+pycodex = "pycodex.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
