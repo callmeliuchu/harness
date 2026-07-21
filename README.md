@@ -10,6 +10,14 @@ python3 -m venv .venv
 .venv/bin/pycodex --workspace /path/to/project "inspect the tests and fix the failing one"
 ```
 
+Each run prints a session ID and writes its history to `~/.pycodex/sessions/<id>.jsonl`. Continue it interactively or after a restart:
+
+```bash
+.venv/bin/pycodex --interactive --workspace /path/to/project
+.venv/bin/pycodex --interactive --resume <session-id>
+.venv/bin/pycodex --resume <session-id> "continue and run the tests"
+```
+
 For unattended operation, add `--full-auto`:
 
 ```bash

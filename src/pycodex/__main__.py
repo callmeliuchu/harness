@@ -7,6 +7,7 @@ from pathlib import Path
 from .agent import Agent
 from .config import DeepSeekConfig
 from .models import OpenAIChatModel
+from .session import JsonlSession
 from .tools import Tool, ToolRegistry, workspace_tools
 
 
@@ -22,26 +23,56 @@ async def allow_all(_: Tool, __: dict) -> bool:
 async def run(args: argparse.Namespace) -> None:
     config = DeepSeekConfig.from_claude_settings()
     model = OpenAIChatModel(**config.__dict__)
-    registry = ToolRegistry(workspace_tools(args.workspace))
+    session = JsonlSession.load(args.session_dir, args.resume) if args.resume else None
+    workspace = args.workspace or (session.workspace if session else Path.cwd())
+    if session and workspace.resolve() != session.workspace.resolve():
+        raise ValueError("--workspace must match the workspace stored in the resumed session")
+    session = session or JsonlSession.create(
+        args.session_dir,
+        instructions="You are a careful coding agent. Inspect before editing and run focused checks after edits.",
+        workspace=workspace,
+    )
+    registry = ToolRegistry(workspace_tools(workspace))
     agent = Agent(
         model,
         registry,
         instructions="You are a careful coding agent. Inspect before editing and run focused checks after edits.",
         approve=allow_all if args.full_auto else console_approval,
+        history=list(session.history),
+        history_sink=session.append,
     )
+    print(f"Session: {session.session_id}")
+    if args.interactive:
+        while True:
+            try:
+                task = input("you> ").strip()
+            except EOFError:
+                print()
+                break
+            if task in {"/exit", "/quit"}:
+                break
+            if task:
+                print(f"agent> {await agent.run(task)}")
+        return
     print(await agent.run(args.task))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Headless DeepSeek coding agent")
-    parser.add_argument("task")
-    parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument("task", nargs="?")
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--interactive", action="store_true", help="continue a local conversation until /exit")
+    parser.add_argument("--resume", metavar="SESSION_ID", help="resume a saved session")
+    parser.add_argument("--session-dir", type=Path, default=Path.home() / ".pycodex" / "sessions")
     parser.add_argument(
         "--full-auto",
         action="store_true",
         help="allow built-in write and command tools without asking",
     )
-    asyncio.run(run(parser.parse_args()))
+    args = parser.parse_args()
+    if not args.interactive and not args.task:
+        parser.error("task is required unless --interactive is used")
+    asyncio.run(run(args))
 
 
 if __name__ == "__main__":

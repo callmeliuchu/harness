@@ -6,6 +6,7 @@ from pathlib import Path
 from pycodex.agent import Agent
 from pycodex.__main__ import allow_all
 from pycodex.models import ModelTurn, ToolCall
+from pycodex.session import JsonlSession
 from pycodex.tools import ToolRegistry, workspace_tools
 
 
@@ -57,3 +58,30 @@ class AgentTests(unittest.TestCase):
             agent = Agent(model, ToolRegistry(workspace_tools(root)), instructions="test")
             self.assertEqual(asyncio.run(agent.run("write a file")), "Denied")
             self.assertFalse((root / "answer.txt").exists())
+
+    def test_saved_history_is_restored_for_the_next_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            session = JsonlSession.create(sessions, instructions="test", workspace=root)
+            first = Agent(
+                FakeModel([ModelTurn("First reply", [])]),
+                ToolRegistry(workspace_tools(root)),
+                instructions="test",
+                history=list(session.history),
+                history_sink=session.append,
+            )
+            asyncio.run(first.run("First question"))
+
+            restored = JsonlSession.load(sessions, session.session_id)
+            model = FakeModel([ModelTurn("Second reply", [])])
+            second = Agent(
+                model,
+                ToolRegistry(workspace_tools(root)),
+                instructions="test",
+                history=list(restored.history),
+                history_sink=restored.append,
+            )
+            self.assertEqual(asyncio.run(second.run("Second question")), "Second reply")
+            roles = [item["role"] for item in second.history]
+            self.assertEqual(roles, ["system", "user", "assistant", "user", "assistant"])
