@@ -8,7 +8,7 @@ from pathlib import Path
 from pycodex.agent import Agent
 from pycodex.__main__ import BASE_INSTRUCTIONS, ConsoleEvents, approval_for, load_instructions
 from pycodex.models import ModelTurn, ToolCall
-from pycodex.session import JsonlSession
+from pycodex.session import JsonlSession, list_sessions, session_events
 from pycodex.tools import ToolError, ToolRegistry, workspace_tools
 
 
@@ -33,6 +33,21 @@ async def approve_all(*_):
 
 
 class AgentTests(unittest.TestCase):
+    def test_lists_shows_and_forks_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "sessions"
+            source = JsonlSession.create(directory, instructions="test", workspace=Path(tmp))
+            source.append({"role": "user", "content": "Inspect the tests"})
+            source.append({"role": "assistant", "content": "I found one failure."})
+            summaries = list_sessions(directory)
+            self.assertEqual(summaries[0]["id"], source.session_id)
+            self.assertEqual(summaries[0]["preview"], "Inspect the tests")
+            self.assertEqual(session_events(directory, source.session_id)[0]["type"], "session")
+            fork = source.fork(directory)
+            self.assertNotEqual(fork.session_id, source.session_id)
+            self.assertEqual(fork.history, source.history)
+            self.assertEqual(session_events(directory, fork.session_id)[-1]["event"], "session_forked")
+
     def test_load_instructions_includes_root_agents_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

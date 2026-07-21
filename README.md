@@ -18,6 +18,14 @@ Each run prints a session ID and writes its history to `~/.pycodex/sessions/<id>
 .venv/bin/pycodex --resume <session-id> "continue and run the tests"
 ```
 
+Manage saved sessions without calling a model:
+
+```bash
+.venv/bin/pycodex --list-sessions
+.venv/bin/pycodex --show-session <session-id>
+.venv/bin/pycodex --fork <session-id>
+```
+
 Permission profiles:
 
 ```bash

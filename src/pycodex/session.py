@@ -73,6 +73,55 @@ class JsonlSession:
         self.history = list(history)
         self._write({"type": "compaction", "at": datetime.now(UTC).isoformat(), "history": self.history})
 
+    def fork(self, directory: Path) -> "JsonlSession":
+        """Create an independent session from the current model-visible history."""
+        instructions = self.history[0].get("content", "") if self.history else ""
+        fork = self.create(directory, instructions=instructions, workspace=self.workspace)
+        for item in self.history[1:]:
+            fork.append(item)
+        fork.append_event("session_forked", {"source_session_id": self.session_id})
+        return fork
+
     def _write(self, event: dict) -> None:
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def session_events(directory: Path, session_id: str) -> list[dict]:
+    path = directory / f"{session_id}.jsonl"
+    if not path.is_file():
+        raise FileNotFoundError(f"Session not found: {session_id}")
+    events = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid session JSON at line {line_number}") from exc
+    return events
+
+
+def list_sessions(directory: Path) -> list[dict]:
+    if not directory.is_dir():
+        return []
+    summaries = []
+    for path in directory.glob("*.jsonl"):
+        try:
+            events = session_events(directory, path.stem)
+        except ValueError:
+            continue
+        metadata = next((event for event in events if event.get("type") == "session"), None)
+        if not metadata:
+            continue
+        first_task = next(
+            (event["item"].get("content", "") for event in events if event.get("type") == "item" and event.get("item", {}).get("role") == "user"),
+            "",
+        )
+        summaries.append({
+            "id": metadata.get("id", path.stem),
+            "workspace": metadata.get("workspace", ""),
+            "created_at": metadata.get("created_at", ""),
+            "preview": first_task,
+            "event_count": len(events),
+            "updated_at": path.stat().st_mtime,
+        })
+    return sorted(summaries, key=lambda item: item["updated_at"], reverse=True)

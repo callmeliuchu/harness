@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
 from .agent import Agent
 from .config import DeepSeekConfig
 from .models import OpenAIChatModel
-from .session import JsonlSession
+from .session import JsonlSession, list_sessions, session_events
 from .tools import Tool, ToolRegistry, workspace_tools
 
 
@@ -92,6 +93,20 @@ class ConsoleEvents:
 
 
 async def run(args: argparse.Namespace) -> None:
+    if args.list_sessions:
+        for item in list_sessions(args.session_dir):
+            preview = item["preview"].replace("\n", " ")[:80]
+            print(f"{item['id']}  {item['event_count']} events  {item['workspace']}\n  {preview}")
+        return
+    if args.show_session:
+        for event in session_events(args.session_dir, args.show_session):
+            print(json.dumps(event, ensure_ascii=False, indent=2))
+        return
+    if args.fork:
+        source = JsonlSession.load(args.session_dir, args.fork)
+        fork = source.fork(args.session_dir)
+        print(f"Forked session: {fork.session_id}")
+        return
     config = DeepSeekConfig.from_claude_settings()
     model = OpenAIChatModel(**config.__dict__)
     session = JsonlSession.load(args.session_dir, args.resume) if args.resume else None
@@ -149,6 +164,10 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--interactive", action="store_true", help="continue a local conversation until /exit")
     parser.add_argument("--resume", metavar="SESSION_ID", help="resume a saved session")
+    management = parser.add_mutually_exclusive_group()
+    management.add_argument("--list-sessions", action="store_true", help="list saved sessions")
+    management.add_argument("--show-session", metavar="SESSION_ID", help="print a saved session's JSONL events")
+    management.add_argument("--fork", metavar="SESSION_ID", help="fork a saved session's current context")
     parser.add_argument("--session-dir", type=Path, default=Path.home() / ".pycodex" / "sessions")
     parser.add_argument("--compact-after-chars", type=int, default=80_000, help="compact history after this estimated size; 0 disables it")
     parser.add_argument(
@@ -163,7 +182,10 @@ def main() -> None:
         help="legacy alias for --approval full-auto",
     )
     args = parser.parse_args()
-    if not args.interactive and not args.task:
+    managing = args.list_sessions or args.show_session or args.fork
+    if managing and (args.interactive or args.task or args.resume):
+        parser.error("session management options cannot be combined with a task, --interactive, or --resume")
+    if not managing and not args.interactive and not args.task:
         parser.error("task is required unless --interactive is used")
     if args.full_auto and args.approval != "ask":
         parser.error("--full-auto cannot be combined with --approval")
