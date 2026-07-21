@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Awaitable, Callable
 
@@ -113,6 +114,9 @@ class Agent:
                         call.name, call.arguments, self.approve,
                         lambda stream, text: self._emit("tool_output", call_id=call.id, name=call.name, stream=stream, text=text),
                     )
+                except asyncio.CancelledError:
+                    self._emit("tool_call_cancelled", call_id=call.id, name=call.name)
+                    raise
                 except Exception as exc:  # Feed tool failures back to the model.
                     result = {"ok": False, "error": str(exc)}
                 self._emit("tool_call_completed", call_id=call.id, name=call.name, ok=result.get("ok", False), result=result)

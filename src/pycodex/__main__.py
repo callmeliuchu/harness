@@ -53,6 +53,8 @@ def print_status(event: str, data: dict) -> None:
         message = f"调用工具：{data['name']}" + (f" ({detail})" if detail else "")
     elif event == "tool_call_completed":
         message = f"工具完成：{data['name']}" if data["ok"] else f"工具失败：{data['name']}"
+    elif event == "tool_call_cancelled":
+        message = f"工具已取消：{data['name']}"
     elif event == "compaction_started":
         message = "正在压缩较早的会话历史…"
     elif event == "compaction_completed":
@@ -85,6 +87,18 @@ class ConsoleEvents:
                 self._line_open = True
             print(data["text"], end="", flush=True)
             self.streamed_text = True
+            return
+        if event == "tool_output":
+            if self._line_open:
+                print()
+                self._line_open = False
+            stream = data["stream"]
+            if stream == "notice":
+                print(f"status> {data['text']}", file=sys.stderr)
+            else:
+                text = data["text"]
+                suffix = "" if text.endswith("\n") else "\n"
+                print(f"{data['name']} {stream}> {text}", end=suffix, file=sys.stderr, flush=True)
             return
         if self._line_open:
             print()
@@ -191,7 +205,10 @@ def main() -> None:
         parser.error("--full-auto cannot be combined with --approval")
     if args.full_auto:
         args.approval = "full-auto"
-    asyncio.run(run(args))
+    try:
+        asyncio.run(run(args))
+    except KeyboardInterrupt:
+        print("status> 已取消当前 Agent 操作", file=sys.stderr)
 
 
 if __name__ == "__main__":

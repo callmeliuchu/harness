@@ -1,5 +1,6 @@
 import asyncio
 import io
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -72,6 +73,14 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(console.streamed_text)
         self.assertEqual(session.append_event.call_count, 3)
 
+    def test_console_events_prints_tool_output_to_stderr(self):
+        session = Mock()
+        console = ConsoleEvents(session)
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            console("tool_output", {"name": "run_command", "stream": "stdout", "text": "hello\n"})
+            console("tool_output", {"name": "run_command", "stream": "notice", "text": "Command output truncated."})
+        self.assertEqual(stderr.getvalue(), "run_command stdout> hello\nstatus> Command output truncated.\n")
+
     def test_workspace_approval_allows_edits_but_asks_for_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             tools = {tool.name: tool for tool in workspace_tools(Path(tmp))}
@@ -140,6 +149,54 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(asyncio.run(agent.run("run a command")), "Completed")
             self.assertIn(("model_text_delta", {"step": 2, "text": "Completed"}), events)
             self.assertIn(("tool_output", {"call_id": "call_1", "name": "run_command", "stream": "stdout", "text": "hello\n"}), events)
+
+    def test_command_output_is_limited_and_reports_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry(workspace_tools(Path(tmp)))
+            events = []
+            result = asyncio.run(registry.execute(
+                "run_command",
+                {"argv": [sys.executable, "-c", "print('x' * 40000)"]},
+                approve_all,
+                lambda stream, text: events.append((stream, text)),
+            ))
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["output_truncated"])
+            self.assertLessEqual(len(result["stdout"]), 30_000)
+            self.assertIn(("notice", "Command output truncated after 30000 bytes."), events)
+
+    def test_command_timeout_returns_structured_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry(workspace_tools(Path(tmp)))
+            result = asyncio.run(registry.execute(
+                "run_command",
+                {"argv": [sys.executable, "-c", "import time; time.sleep(10)"], "timeout_seconds": 0.01},
+                approve_all,
+            ))
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error_type"], "timeout")
+
+    def test_cancelled_command_emits_agent_cancellation_event(self):
+        async def cancel_running_agent():
+            with tempfile.TemporaryDirectory() as tmp:
+                events = []
+                model = FakeModel([ModelTurn("", [ToolCall("call_1", "run_command", {"argv": [sys.executable, "-c", "import time; time.sleep(10)"]})])])
+                agent = Agent(
+                    model,
+                    ToolRegistry(workspace_tools(Path(tmp))),
+                    instructions="test",
+                    approve=approve_all,
+                    on_event=lambda event, _: events.append(event),
+                )
+                task = asyncio.create_task(agent.run("run a command"))
+                await asyncio.sleep(0.05)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                return events
+
+        events = asyncio.run(cancel_running_agent())
+        self.assertIn("tool_call_cancelled", events)
 
     def test_workspace_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

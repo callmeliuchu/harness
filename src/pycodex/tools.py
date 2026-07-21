@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,28 +191,70 @@ def workspace_tools(root: Path) -> list[Tool]:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
-        try:
-            async def read_stream(stream: asyncio.StreamReader | None, name: str) -> bytes:
-                chunks = []
-                while line := await stream.readline():
-                    chunks.append(line)
-                    if on_output:
-                        on_output(name, line.decode(errors="replace"))
-                return b"".join(chunks)
 
-            stdout, stderr = await asyncio.wait_for(
-                asyncio.gather(read_stream(process.stdout, "stdout"), read_stream(process.stderr, "stderr")), timeout=timeout
-            )
-        except TimeoutError:
-            os.killpg(process.pid, 15)
-            await process.wait()
-            return {"ok": False, "error": f"Timed out after {timeout}s"}
+        async def stop_process() -> None:
+            if process.returncode is not None:
+                return
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except TimeoutError:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+
         limit = 30_000
+        output_size = 0
+        truncated = False
+
+        async def read_stream(stream: asyncio.StreamReader | None, name: str) -> bytes:
+            nonlocal output_size, truncated
+            chunks = []
+            while chunk := await stream.read(4096):
+                remaining = max(limit - output_size, 0)
+                visible = chunk[:remaining]
+                output_size += len(visible)
+                if visible:
+                    chunks.append(visible)
+                    if on_output:
+                        on_output(name, visible.decode(errors="replace"))
+                if len(visible) < len(chunk) and not truncated:
+                    truncated = True
+                    if on_output:
+                        on_output("notice", f"Command output truncated after {limit} bytes.")
+            return b"".join(chunks)
+
+        stdout_task = asyncio.create_task(read_stream(process.stdout, "stdout"))
+        stderr_task = asyncio.create_task(read_stream(process.stderr, "stderr"))
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except TimeoutError:
+            await stop_process()
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            return {
+                "ok": False,
+                "error_type": "timeout",
+                "error": f"Timed out after {timeout}s",
+                "stdout": stdout.decode(errors="replace"),
+                "stderr": stderr.decode(errors="replace"),
+                "output_truncated": truncated,
+            }
+        except asyncio.CancelledError:
+            await stop_process()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            raise
+        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
         return {
             "ok": process.returncode == 0,
             "exit_code": process.returncode,
             "stdout": stdout.decode(errors="replace")[:limit],
             "stderr": stderr.decode(errors="replace")[:limit],
+            "output_truncated": truncated,
         }
 
     object_schema = {"type": "object", "additionalProperties": False}
