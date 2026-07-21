@@ -7,7 +7,7 @@ from pycodex.agent import Agent
 from pycodex.__main__ import allow_all
 from pycodex.models import ModelTurn, ToolCall
 from pycodex.session import JsonlSession
-from pycodex.tools import ToolRegistry, workspace_tools
+from pycodex.tools import ToolError, ToolRegistry, workspace_tools
 
 
 class FakeModel:
@@ -140,3 +140,44 @@ class AgentTests(unittest.TestCase):
             self.assertIn("[Conversation summary]", agent.history[1]["content"])
             restored = JsonlSession.load(root / "sessions", session.session_id)
             self.assertIn("[Conversation summary]", restored.history[1]["content"])
+
+    def test_search_text_returns_line_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "notes.txt").write_text("first\nneedle here\nlast\n")
+            registry = ToolRegistry(workspace_tools(root))
+            result = asyncio.run(registry.execute("search_text", {"query": "needle"}, approve_all))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["matches"][0]["path"], "notes.txt")
+            self.assertEqual(result["matches"][0]["line"], 2)
+            self.assertEqual(len(result["matches"][0]["context"]), 3)
+
+    def test_apply_patch_checks_paths_then_applies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "notes.txt").write_text("old\n")
+            patch = """diff --git a/notes.txt b/notes.txt
+--- a/notes.txt
++++ b/notes.txt
+@@ -1 +1 @@
+-old
++new
+"""
+            registry = ToolRegistry(workspace_tools(root))
+            result = asyncio.run(registry.execute("apply_patch", {"patch": patch}, approve_all))
+            self.assertEqual(result, {"ok": True, "checked": True, "applied": True, "paths": ["notes.txt"]})
+            self.assertEqual((root / "notes.txt").read_text(), "new\n")
+
+    def test_apply_patch_rejects_workspace_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            patch = """diff --git a/../outside.txt b/../outside.txt
+--- a/../outside.txt
++++ b/../outside.txt
+@@ -0,0 +1 @@
++nope
+"""
+            registry = ToolRegistry(workspace_tools(root))
+            with self.assertRaises(ToolError):
+                asyncio.run(registry.execute("apply_patch", {"patch": patch}, approve_all))

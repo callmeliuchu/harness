@@ -103,12 +103,12 @@ class Agent:
                 } for call in turn.tool_calls],
             })
             for call in turn.tool_calls:
-                self._emit("tool_call_started", name=call.name, arguments=call.arguments)
+                self._emit("tool_call_started", call_id=call.id, name=call.name, arguments=call.arguments)
                 try:
                     result = await self.tools.execute(call.name, call.arguments, self.approve)
                 except Exception as exc:  # Feed tool failures back to the model.
                     result = {"ok": False, "error": str(exc)}
-                self._emit("tool_call_completed", name=call.name, ok=result.get("ok", False))
+                self._emit("tool_call_completed", call_id=call.id, name=call.name, ok=result.get("ok", False), result=result)
                 self._append({
                     "role": "tool",
                     "tool_call_id": call.id,

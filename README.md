@@ -28,6 +28,8 @@ It reads `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and, by default, `ANTHROPIC_SMALL_
 
 Every write or command requires a terminal confirmation unless `--full-auto` is supplied. Reads are allowed automatically. The workspace check prevents the built-in file tools from accessing paths outside `--workspace`; it is not a replacement for a container sandbox when running untrusted commands.
 
+Built-in coding tools include `search_text` (ripgrep matches with line context) and `apply_patch` (unified diff only; paths are confined to the workspace and `git apply --check --no-index` must succeed before it writes).
+
 While a turn is running, the terminal prints status lines for model requests and tool calls. These report agent activity, not hidden model reasoning.
 
 Long sessions automatically compact older history at an estimated 80,000 characters while preserving a structured summary and recent messages. The complete event log remains in the session JSONL. Use `--compact-after-chars 0` to disable it or set a lower threshold for testing.
