@@ -30,6 +30,10 @@ def print_status(event: str, data: dict) -> None:
         message = f"调用工具：{data['name']}" + (f" ({detail})" if detail else "")
     elif event == "tool_call_completed":
         message = f"工具完成：{data['name']}" if data["ok"] else f"工具失败：{data['name']}"
+    elif event == "compaction_started":
+        message = "正在压缩较早的会话历史…"
+    elif event == "compaction_completed":
+        message = "会话历史压缩完成"
     elif event == "turn_completed":
         message = "回答完成"
     else:
@@ -58,6 +62,8 @@ async def run(args: argparse.Namespace) -> None:
         history=list(session.history),
         history_sink=session.append,
         on_event=print_status,
+        compact_after_chars=args.compact_after_chars,
+        compaction_sink=session.replace_history,
     )
     print(f"Session: {session.session_id}")
     if args.interactive:
@@ -82,6 +88,7 @@ def main() -> None:
     parser.add_argument("--interactive", action="store_true", help="continue a local conversation until /exit")
     parser.add_argument("--resume", metavar="SESSION_ID", help="resume a saved session")
     parser.add_argument("--session-dir", type=Path, default=Path.home() / ".pycodex" / "sessions")
+    parser.add_argument("--compact-after-chars", type=int, default=80_000, help="compact history after this estimated size; 0 disables it")
     parser.add_argument(
         "--full-auto",
         action="store_true",

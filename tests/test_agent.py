@@ -111,3 +111,32 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(asyncio.run(second.run("Second question")), "Second reply")
             roles = [item["role"] for item in second.history]
             self.assertEqual(roles, ["system", "user", "assistant", "user", "assistant"])
+
+    def test_compaction_replaces_context_and_persists_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = JsonlSession.create(root / "sessions", instructions="test", workspace=root)
+            for item in [
+                {"role": "user", "content": "old question " * 20},
+                {"role": "assistant", "content": "old answer " * 20},
+                {"role": "user", "content": "recent question"},
+                {"role": "assistant", "content": "recent answer"},
+            ]:
+                session.append(item)
+            events = []
+            agent = Agent(
+                FakeModel([ModelTurn("The earlier work inspected old files.", []), ModelTurn("Continued", [])]),
+                ToolRegistry(workspace_tools(root)),
+                instructions="test",
+                history=list(session.history),
+                history_sink=session.append,
+                compaction_sink=session.replace_history,
+                compact_after_chars=1,
+                keep_recent_messages=2,
+                on_event=lambda event, _: events.append(event),
+            )
+            self.assertEqual(asyncio.run(agent.run("new question")), "Continued")
+            self.assertIn("compaction_completed", events)
+            self.assertIn("[Conversation summary]", agent.history[1]["content"])
+            restored = JsonlSession.load(root / "sessions", session.session_id)
+            self.assertIn("[Conversation summary]", restored.history[1]["content"])

@@ -54,6 +54,8 @@ class JsonlSession:
                 metadata = event
             elif event.get("type") == "item" and isinstance(event.get("item"), dict):
                 history.append(event["item"])
+            elif event.get("type") == "compaction" and isinstance(event.get("history"), list):
+                history = event["history"]
 
         if not metadata or not history:
             raise ValueError(f"Session is incomplete: {session_id}")
@@ -62,6 +64,11 @@ class JsonlSession:
     def append(self, item: dict) -> None:
         self.history.append(item)
         self._write({"type": "item", "item": item})
+
+    def replace_history(self, history: list[dict]) -> None:
+        """Persist a compacted model context while retaining prior JSONL events."""
+        self.history = list(history)
+        self._write({"type": "compaction", "history": self.history})
 
     def _write(self, event: dict) -> None:
         with self.path.open("a", encoding="utf-8") as file:

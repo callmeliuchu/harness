@@ -30,6 +30,8 @@ Every write or command requires a terminal confirmation unless `--full-auto` is 
 
 While a turn is running, the terminal prints status lines for model requests and tool calls. These report agent activity, not hidden model reasoning.
 
+Long sessions automatically compact older history at an estimated 80,000 characters while preserving a structured summary and recent messages. The complete event log remains in the session JSONL. Use `--compact-after-chars 0` to disable it or set a lower threshold for testing.
+
 ## Verify
 
 ```bash
