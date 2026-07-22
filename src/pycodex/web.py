@@ -4,11 +4,19 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from .__main__ import load_instructions
+from .agent import Agent
+from .config import DeepSeekConfig
+from .models import OpenAIChatModel
+from .session import JsonlSession
+from .tools import Tool, ToolRegistry, workspace_tools
 
 
 def _read_events(path: Path) -> list[dict]:
@@ -53,11 +61,63 @@ def _session_summary(path: Path) -> dict | None:
     }
 
 
-def create_app(session_dir: Path | None = None) -> FastAPI:
+def create_app(session_dir: Path | None = None, workspace: Path | None = None) -> FastAPI:
     session_dir = (session_dir or Path.home() / ".pycodex" / "sessions").expanduser()
+    workspace = (workspace or Path.cwd()).resolve()
     static_dir = Path(__file__).parent / "static"
-    app = FastAPI(title="PyCodex Trace", docs_url=None, redoc_url=None)
+    app = FastAPI(title="PyCodex", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://127.0.0.1:3000", "http://localhost:3000", "http://127.0.0.1:3001", "http://localhost:3001"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
     app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
+    pending_approvals: dict[str, asyncio.Future[bool]] = {}
+    running_sessions: set[str] = set()
+
+    async def run_chat(session: JsonlSession, message: str) -> None:
+        instructions = load_instructions(session.workspace)
+        history = list(session.history)
+        if history and history[0].get("role") == "system":
+            history[0] = {"role": "system", "content": instructions}
+        else:
+            history.insert(0, {"role": "system", "content": instructions})
+
+        async def approve(tool: Tool, arguments: dict) -> bool:
+            approval_id = str(uuid4())
+            future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            pending_approvals[approval_id] = future
+            session.append_event("approval_requested", {
+                "approval_id": approval_id,
+                "name": tool.name,
+                "arguments": arguments,
+            })
+            try:
+                return await future
+            finally:
+                pending_approvals.pop(approval_id, None)
+
+        def record_event(event: str, data: dict) -> None:
+            session.append_event(event, data)
+
+        try:
+            config = DeepSeekConfig.from_claude_settings()
+            agent = Agent(
+                OpenAIChatModel(**config.__dict__),
+                ToolRegistry(workspace_tools(session.workspace)),
+                instructions=instructions,
+                approve=approve,
+                history=history,
+                history_sink=session.append,
+                on_event=record_event,
+                compaction_sink=session.replace_history,
+            )
+            await agent.run(message)
+        except Exception as exc:
+            session.append_event("turn_failed", {"error": str(exc)})
+        finally:
+            running_sessions.discard(session.session_id)
 
     @app.get("/api/sessions")
     def list_sessions() -> list[dict]:
@@ -100,9 +160,47 @@ def create_app(session_dir: Path | None = None) -> FastAPI:
 
         return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
+    @app.post("/api/chat")
+    async def chat(payload: dict) -> dict:
+        message = payload.get("message")
+        session_id = payload.get("session_id")
+        if not isinstance(message, str) or not message.strip():
+            raise HTTPException(status_code=422, detail="message must be a non-empty string")
+        if session_id is not None and not isinstance(session_id, str):
+            raise HTTPException(status_code=422, detail="session_id must be a string")
+        try:
+            session = JsonlSession.load(session_dir, session_id) if session_id else JsonlSession.create(
+                session_dir, instructions=load_instructions(workspace), workspace=workspace,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if session.workspace.resolve() != workspace:
+            raise HTTPException(status_code=409, detail="session belongs to another workspace")
+        if session.session_id in running_sessions:
+            raise HTTPException(status_code=409, detail="session is already running")
+        running_sessions.add(session.session_id)
+        asyncio.create_task(run_chat(session, message.strip()))
+        return {"session_id": session.session_id}
+
+    @app.post("/api/sessions/{session_id}/approvals/{approval_id}")
+    async def resolve_approval(session_id: str, approval_id: str, payload: dict) -> dict:
+        _session_path(session_dir, session_id)
+        allowed = payload.get("allowed")
+        if not isinstance(allowed, bool):
+            raise HTTPException(status_code=422, detail="allowed must be a boolean")
+        future = pending_approvals.get(approval_id)
+        if future is None or future.done():
+            raise HTTPException(status_code=404, detail="approval not found")
+        future.set_result(allowed)
+        return {"ok": True}
+
     @app.get("/")
-    def dashboard() -> FileResponse:
+    def chat_page() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/trace")
+    def dashboard() -> FileResponse:
+        return FileResponse(static_dir / "trace.html")
 
     return app
 
@@ -112,10 +210,11 @@ def main() -> None:
     parser.add_argument("--session-dir", type=Path, default=Path.home() / ".pycodex" / "sessions")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="workspace exposed to the web agent")
     args = parser.parse_args()
     import uvicorn
 
-    uvicorn.run(create_app(args.session_dir), host=args.host, port=args.port)
+    uvicorn.run(create_app(args.session_dir, args.workspace), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

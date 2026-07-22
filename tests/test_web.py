@@ -22,7 +22,8 @@ class WebTests(unittest.TestCase):
             self.assertEqual(listing.json()[0]["id"], session.session_id)
             detail = client.get(f"/api/sessions/{session.session_id}").json()
             self.assertTrue(any(event.get("type") == "agent_event" for event in detail["events"]))
-            self.assertIn("PyCodex Trace", client.get("/").text)
+            self.assertIn("PyCodex Console", client.get("/").text)
+            self.assertEqual(client.get("/trace").status_code, 200)
 
     def test_dashboard_registers_event_stream(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -31,3 +32,10 @@ class WebTests(unittest.TestCase):
             app = create_app(sessions)
             paths = {route.path for route in app.routes}
             self.assertIn("/api/sessions/{session_id}/events", paths)
+            self.assertIn("/api/chat", paths)
+
+    def test_chat_requires_a_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = TestClient(create_app(Path(tmp) / "sessions", Path(tmp)))
+            response = client.post("/api/chat", json={})
+            self.assertEqual(response.status_code, 422)
